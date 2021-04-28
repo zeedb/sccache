@@ -176,7 +176,8 @@ pub struct GCSCredentialProvider {
 /// ServiceAccountInfo either contains a URL to fetch the oauth token
 /// or the service account key
 pub enum ServiceAccountInfo {
-    URL(String),
+    DeprecatedURL(String),
+    OAuthURL(String),
     AccountKey(ServiceAccountKey),
 }
 
@@ -258,7 +259,16 @@ struct TokenMsg {
 
 /// AuthResponse represents the json response body from taskcluster-auth.gcsCredentials endpoint
 #[derive(Deserialize)]
-struct AuthResponse {
+struct DeprecatedAuthResponse {
+    #[serde(rename = "accessToken")]
+    access_token: String,
+    #[serde(rename = "expireTime")]
+    expire_time: String,
+}
+
+/// AuthResponse represents the json response body from taskcluster-auth.gcsCredentials endpoint
+#[derive(Deserialize)]
+struct OAuthResponse {
     access_token: String,
     expires_in: i64,
 }
@@ -441,7 +451,38 @@ impl GCSCredentialProvider {
                 })
                 .and_then(move |body| {
                     let body_str = String::from_utf8(body)?;
-                    let resp: AuthResponse = serde_json::from_str(&body_str)?;
+                    let resp: DeprecatedAuthResponse = serde_json::from_str(&body_str)?;
+                    Ok(GCSCredential {
+                        token: resp.access_token,
+                        expiration_time: resp.expire_time.parse()?,
+                    })
+                }),
+        )
+    }
+
+    fn request_new_token_from_oauth(&self, url: &str, client: &Client) -> SFuture<GCSCredential> {
+        Box::new(
+            client
+                .get(url)
+                .send()
+                .map_err(Into::into)
+                .and_then(move |res| {
+                    if res.status().is_success() {
+                        Ok(res.into_body())
+                    } else {
+                        Err(BadHttpStatusError(res.status()).into())
+                    }
+                })
+                .and_then(move |body| {
+                    body.fold(Vec::new(), |mut body, chunk| {
+                        body.extend_from_slice(&chunk);
+                        Ok::<_, reqwest::Error>(body)
+                    })
+                    .fcontext("failed to read HTTP body")
+                })
+                .and_then(move |body| {
+                    let body_str = String::from_utf8(body)?;
+                    let resp: OAuthResponse = serde_json::from_str(&body_str)?;
                     Ok(GCSCredential {
                         token: resp.access_token,
                         expiration_time: chrono::offset::Utc::now()
@@ -465,7 +506,12 @@ impl GCSCredentialProvider {
                 ServiceAccountInfo::AccountKey(ref sa_key) => {
                     self.request_new_token(sa_key, client)
                 }
-                ServiceAccountInfo::URL(ref url) => self.request_new_token_from_tcauth(url, client),
+                ServiceAccountInfo::DeprecatedURL(ref url) => {
+                    self.request_new_token_from_tcauth(url, client)
+                }
+                ServiceAccountInfo::OAuthURL(ref url) => {
+                    self.request_new_token_from_tcauth(url, client)
+                }
             };
             *future_opt = Some(credentials.shared());
         };
@@ -557,8 +603,47 @@ impl Storage for GCSCache {
 
 #[test]
 fn test_gcs_credential_provider() {
-    const EXPIRE_TIME: i64 = 600;
+    const EXPIRE_TIME: &str = "3000-01-01T00:00:00.0Z";
     let addr = ([127, 0, 0, 1], 3000).into();
+    let make_service = || {
+        hyper::service::service_fn_ok(|_| {
+            let token = serde_json::json!({
+                "accessToken": "1234567890",
+                "expireTime": EXPIRE_TIME,
+            });
+            hyper::Response::new(hyper::Body::from(token.to_string()))
+        })
+    };
+
+    let server = hyper::Server::bind(&addr).serve(make_service);
+
+    let credential_provider = GCSCredentialProvider::new(
+        RWMode::ReadWrite,
+        ServiceAccountInfo::DeprecatedURL("http://127.0.0.1:3000/".to_string()),
+    );
+
+    let client = Client::new();
+    let cred_fut = credential_provider
+        .credentials(&client)
+        .map(move |credential| {
+            assert_eq!(credential.token, "1234567890");
+            assert_eq!(
+                credential.expiration_time.timestamp(),
+                EXPIRE_TIME
+                    .parse::<chrono::DateTime<chrono::offset::Utc>>()
+                    .unwrap()
+                    .timestamp(),
+            );
+        })
+        .map_err(move |err| panic!(err.to_string()));
+
+    server.with_graceful_shutdown(cred_fut);
+}
+
+#[test]
+fn test_gcs_oauth_provider() {
+    const EXPIRE_TIME: i64 = 600;
+    let addr = ([127, 0, 0, 1], 3001).into();
     let make_service = || {
         hyper::service::service_fn_ok(|_| {
             let token = serde_json::json!({
@@ -573,7 +658,7 @@ fn test_gcs_credential_provider() {
 
     let credential_provider = GCSCredentialProvider::new(
         RWMode::ReadWrite,
-        ServiceAccountInfo::URL("http://127.0.0.1:3000/".to_string()),
+        ServiceAccountInfo::OAuthURL("http://127.0.0.1:3001/".to_string()),
     );
 
     let client = Client::new();
