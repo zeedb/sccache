@@ -259,10 +259,8 @@ struct TokenMsg {
 /// AuthResponse represents the json response body from taskcluster-auth.gcsCredentials endpoint
 #[derive(Deserialize)]
 struct AuthResponse {
-    #[serde(rename = "accessToken")]
     access_token: String,
-    #[serde(rename = "expireTime")]
-    expire_time: String,
+    expires_in: String,
 }
 
 /// RWMode describes whether or not to attempt cache writes.
@@ -446,7 +444,8 @@ impl GCSCredentialProvider {
                     let resp: AuthResponse = serde_json::from_str(&body_str)?;
                     Ok(GCSCredential {
                         token: resp.access_token,
-                        expiration_time: resp.expire_time.parse()?,
+                        expiration_time: chrono::offset::Utc::now()
+                            + chrono::Duration::seconds(resp.expires_in.parse()?),
                     })
                 }),
         )
@@ -558,13 +557,13 @@ impl Storage for GCSCache {
 
 #[test]
 fn test_gcs_credential_provider() {
-    const EXPIRE_TIME: &str = "3000-01-01T00:00:00.0Z";
+    const EXPIRE_TIME: &str = "600";
     let addr = ([127, 0, 0, 1], 3000).into();
     let make_service = || {
         hyper::service::service_fn_ok(|_| {
             let token = serde_json::json!({
-                "accessToken": "1234567890",
-                "expireTime": EXPIRE_TIME,
+                "access_token": "1234567890",
+                "expires_in": EXPIRE_TIME,
             });
             hyper::Response::new(hyper::Body::from(token.to_string()))
         })
