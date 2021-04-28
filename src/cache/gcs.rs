@@ -260,7 +260,7 @@ struct TokenMsg {
 #[derive(Deserialize)]
 struct AuthResponse {
     access_token: String,
-    expires_in: String,
+    expires_in: i64,
 }
 
 /// RWMode describes whether or not to attempt cache writes.
@@ -445,7 +445,7 @@ impl GCSCredentialProvider {
                     Ok(GCSCredential {
                         token: resp.access_token,
                         expiration_time: chrono::offset::Utc::now()
-                            + chrono::Duration::seconds(resp.expires_in.parse()?),
+                            + chrono::Duration::seconds(resp.expires_in),
                     })
                 }),
         )
@@ -557,7 +557,7 @@ impl Storage for GCSCache {
 
 #[test]
 fn test_gcs_credential_provider() {
-    const EXPIRE_TIME: &str = "600";
+    const EXPIRE_TIME: i64 = 600;
     let addr = ([127, 0, 0, 1], 3000).into();
     let make_service = || {
         hyper::service::service_fn_ok(|_| {
@@ -581,13 +581,6 @@ fn test_gcs_credential_provider() {
         .credentials(&client)
         .map(move |credential| {
             assert_eq!(credential.token, "1234567890");
-            assert_eq!(
-                credential.expiration_time.timestamp(),
-                EXPIRE_TIME
-                    .parse::<chrono::DateTime<chrono::offset::Utc>>()
-                    .unwrap()
-                    .timestamp(),
-            );
         })
         .map_err(move |err| panic!(err.to_string()));
 
