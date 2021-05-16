@@ -7,7 +7,7 @@ RUN cargo build --release
 
 FROM rust:buster
 
-RUN rustup toolchain install nightly-2020-05-10 && \
-    rustup default nightly-2020-05-10
+RUN rustup toolchain install nightly-2021-05-10 && \
+    rustup default nightly-2021-05-10
 
 COPY --from=builder /sccache/target/release/sccache /usr/local/bin/sccache
