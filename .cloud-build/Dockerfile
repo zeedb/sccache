@@ -1,13 +1,12 @@
 FROM rust:buster AS builder
 
-COPY . /sccache
-WORKDIR /sccache
+COPY . /workspace
+WORKDIR /workspace
 RUN cargo test --locked --all-targets
 RUN cargo build --release
 
-FROM rust:buster
+FROM rust:buster-slim
 
-RUN rustup toolchain install nightly-2021-05-10 && \
-    rustup default nightly-2021-05-10
+COPY --from=builder /workspace/target/release/sccache /usr/local/bin/sccache
 
-COPY --from=builder /sccache/target/release/sccache /usr/local/bin/sccache
+CMD ["sccache"]
