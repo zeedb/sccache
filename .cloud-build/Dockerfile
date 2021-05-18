@@ -5,7 +5,7 @@ WORKDIR /workspace
 RUN cargo test --locked --all-targets
 RUN cargo build --release
 
-FROM rust:buster-slim
+FROM rust:slim-buster
 
 COPY --from=builder /workspace/target/release/sccache /usr/local/bin/sccache
 
